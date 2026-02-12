@@ -17,6 +17,10 @@ Only two files are changed:
 
 The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
 
+> **Important: SQS must be running before osmosisd starts.** The pre-flight check in `app.go` attempts to connect to the SQS gRPC endpoint with a 5-second timeout during app initialization. If SQS is not reachable, `osmosisd` will **panic and refuse to start**. This is intentional — it prevents the node from wasting time syncing blocks only to fail when it tries to push pool data.
+
+> **Companion repo:** This fork is designed to work with a patched version of [SQS](https://github.com/osmosis-labs/sqs) that includes extended CoinGecko caching for snapshot processing. Without the SQS-side caching fix, the pricing worker may trigger CoinGecko API rate limits when processing the large initial pool data push. See the SQS fork README for details.
+
 ---
 
 ## Prerequisites
@@ -71,14 +75,16 @@ grpc-ingest-address = ["localhost:50051"]
 grpc-ingest-max-call-size-bytes = 100000000
 ```
 
-## Step 5: Start SQS first
+## Step 5: Start SQS first (required before osmosisd)
+
+**SQS must be running and listening on port 50051 before you start osmosisd.** The patched binary performs a pre-flight gRPC connectivity check on startup and will panic if SQS is not reachable.
 
 ```bash
 cd /root/sqs   # or wherever your SQS source is
 go run ./...
 ```
 
-Wait until you see it's listening on port 50051.
+Wait until you see it's listening on port 50051, then proceed to Step 6.
 
 ## Step 6: Start the patched osmosisd
 
@@ -89,9 +95,9 @@ osmosisd start
 You should see:
 1. `SQS pre-flight check passed: localhost:50051 is reachable`
 2. The node syncing / catching up to the network
-3. On the first committed block: pool extraction logs
-4. `SQS SNAPSHOT INGEST COMPLETE — ALL POOLS PUSHED!`
-5. The process exits automatically
+3. On the first committed block: pool extraction logs with counts (concentrated, cfmm, cosmwasm)
+4. `SQS INGEST COMPLETE` / `All pool data pushed successfully. Halting.`
+5. The process exits automatically (`os.Exit(0)`)
 
 ## Step 7: Verify SQS received the data
 
@@ -99,3 +105,15 @@ Check SQS has the pool data:
 ```bash
 curl -sS http://localhost:9092/pools | python3 -m json.tool | head -50
 ```
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Panic: `SQS pre-flight check failed: cannot reach SQS gRPC at ...` | SQS is not running or not listening on the configured port | Start SQS first (Step 5), confirm port 50051 is open |
+| Panic on startup with app version / upgrade handler errors | Snapshot is from a height incompatible with this binary (v31) | Use a recent snapshot compatible with the v31 module version |
+| Node hangs at "Searching for peers..." | No seeds configured or firewall blocking P2P | Verify seeds in `config.toml` (Step 3), check firewall allows outbound on port 26656 |
+| gRPC errors during pool push | Message size exceeds limit | Increase `grpc-ingest-max-call-size-bytes` in `app.toml` |
+| SQS reports CoinGecko rate limit errors | SQS branch does not have the extended caching fix | Use the patched SQS branch with extended CoinGecko cache TTL |
