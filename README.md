@@ -1,6 +1,6 @@
 # Osmosis -- Snapshot Ingestor Branch
 
-> **This is a special-purpose branch: `sqs-snapshot-ingestor`**
+> **This is a special-purpose branch: `osmosis-snapshot-for-sqs-ingest`**
 >
 > This branch provides a patched `osmosisd` binary that starts from a mainnet snapshot, pushes
 > **all** pool data to SQS via gRPC on the very first committed block, and then **halts automatically**.
@@ -54,7 +54,7 @@ The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
 ```bash
 git clone https://github.com/jasbanza/osmosis.git
 cd osmosis
-git checkout sqs-snapshot-ingestor
+git checkout osmosis-snapshot-for-sqs-ingest
 go install ./cmd/osmosisd
 ```
 
@@ -89,8 +89,8 @@ Edit `~/.osmosisd/config/app.toml` and add/update the SQS section:
 ```toml
 [osmosis-sqs]
 is-enabled = true
-grpc-ingest-address = ["localhost:50051"]
-grpc-ingest-max-call-size-bytes = 100000000
+grpc-ingest-address = [localhost:50051]
+grpc-ingest-max-call-size-bytes = 52428800
 ```
 
 ## Step 5: Start SQS first (required before osmosisd)
@@ -100,6 +100,9 @@ grpc-ingest-max-call-size-bytes = 100000000
 ```bash
 cd /root/sqs   # or wherever your SQS source is
 go run ./...
+
+# or 
+make dev
 ```
 
 Wait until you see it's listening on port 50051, then proceed to Step 6.
