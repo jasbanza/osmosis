@@ -1,32 +1,49 @@
-# Osmosis SQS Snapshot Ingestor
+# Osmosis -- Snapshot Ingestor Branch
 
-> **This is a modified fork of [`osmosis-labs/osmosis`](https://github.com/osmosis-labs/osmosis).** For the full Osmosis documentation, see the [upstream repository](https://github.com/osmosis-labs/osmosis).
+> **This is a special-purpose branch: `sqs-snapshot-ingestor`**
+>
+> This branch provides a patched `osmosisd` binary that starts from a mainnet snapshot, pushes
+> **all** pool data to SQS via gRPC on the very first committed block, and then **halts automatically**.
+> It is designed to work with a companion SQS fork for offline reproduction and testing of routing
+> fixes (e.g. OSMO-53).
+>
+> **Key differences from upstream `osmosis-labs/osmosis`:**
+>
+> - **Node sync check removed** -- the block processor skips the "is node syncing" gate so pool
+>   data is ingested immediately, even while the node is catching up from a snapshot.
+> - **Auto-halt after SQS push** -- `os.Exit(0)` is called after the first successful pool data
+>   push, so the node stops automatically once its job is done.
+> - **Pre-flight gRPC connectivity check** -- on startup, the binary verifies SQS is reachable
+>   (5-second timeout). If not, it panics immediately to avoid wasting time syncing blocks.
+>
+> **Related repositories:**
+>
+> - SQS snapshot fork: [jasbanza/sqs (`jason/sqs-for-snapshot-and-cached-coingecko`)](https://github.com/jasbanza/sqs/tree/jason/sqs-for-snapshot-and-cached-coingecko)
+> - Upstream Osmosis: [osmosis-labs/osmosis](https://github.com/osmosis-labs/osmosis)
+> - Upstream SQS: [osmosis-labs/sqs](https://github.com/osmosis-labs/sqs)
+>
+> **Important: SQS must be running before osmosisd starts.** The pre-flight check will panic if
+> the SQS gRPC endpoint is not reachable. See Steps 5-6 below.
 
-A single-purpose patched `osmosisd` binary that starts from a snapshot, pushes **all** pool data to SQS via gRPC on the very first committed block, and then **halts automatically**.
+---
 
-Use this to capture SQS pool/route state from a snapshot-restored node with minimal block advancement, so you can run SQS offline from those state files for reproducible testing.
+## Files changed
 
-## What's different from upstream?
-
-Only two files are changed:
+Only two files are modified from upstream:
 
 | File | Change |
 |------|--------|
-| `ingest/sqs/service/blockprocessor/full_sqs_block_process_strategy.go` | Removed the node sync check; added auto-halt (`os.Exit(0)`) after successful SQS push |
-| `app/app.go` | Added pre-flight gRPC connectivity check — panics immediately if SQS isn't reachable |
+| `ingest/sqs/service/blockprocessor/full_sqs_block_process_strategy.go` | Removed the node sync check; added structured pool count logging; added auto-halt (`os.Exit(0)`) after successful SQS push |
+| `app/app.go` | Added pre-flight gRPC connectivity check -- panics immediately if SQS isn't reachable |
 
 The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
-
-> **Important: SQS must be running before osmosisd starts.** The pre-flight check in `app.go` attempts to connect to the SQS gRPC endpoint with a 5-second timeout during app initialization. If SQS is not reachable, `osmosisd` will **panic and refuse to start**. This is intentional — it prevents the node from wasting time syncing blocks only to fail when it tries to push pool data.
-
-> **Companion repo:** This fork is designed to work with a patched version of [SQS](https://github.com/osmosis-labs/sqs) that includes extended CoinGecko caching for snapshot processing. Without the SQS-side caching fix, the pricing worker may trigger CoinGecko API rate limits when processing the large initial pool data push. See the SQS fork README for details.
 
 ---
 
 ## Prerequisites
 
 - An Osmosis snapshot (any age) restored to `~/.osmosisd/data/`
-- SQS source code (your branch) — e.g. at `/root/sqs`
+- The companion SQS fork (snapshot branch) -- see Related repositories above
 - Both on the same machine (or adjust addresses accordingly)
 - Go 1.21+ installed
 
@@ -37,11 +54,12 @@ The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
 ```bash
 git clone https://github.com/jasbanza/osmosis.git
 cd osmosis
-git checkout sqs-snapshot-ingestor   # or whatever branch the PR merges to
+git checkout sqs-snapshot-ingestor
 go install ./cmd/osmosisd
 ```
 
 Verify:
+
 ```bash
 osmosisd version
 ```
@@ -93,6 +111,7 @@ osmosisd start
 ```
 
 You should see:
+
 1. `SQS pre-flight check passed: localhost:50051 is reachable`
 2. The node syncing / catching up to the network
 3. On the first committed block: pool extraction logs with counts (concentrated, cfmm, cosmwasm)
@@ -102,6 +121,7 @@ You should see:
 ## Step 7: Verify SQS received the data
 
 Check SQS has the pool data:
+
 ```bash
 curl -sS http://localhost:9092/pools | python3 -m json.tool | head -50
 ```
@@ -117,3 +137,11 @@ curl -sS http://localhost:9092/pools | python3 -m json.tool | head -50
 | Node hangs at "Searching for peers..." | No seeds configured or firewall blocking P2P | Verify seeds in `config.toml` (Step 3), check firewall allows outbound on port 26656 |
 | gRPC errors during pool push | Message size exceeds limit | Increase `grpc-ingest-max-call-size-bytes` in `app.toml` |
 | SQS reports CoinGecko rate limit errors | SQS branch does not have the extended caching fix | Use the patched SQS branch with extended CoinGecko cache TTL |
+
+---
+
+## Original upstream README
+
+For the full Osmosis documentation, see the [upstream repository](https://github.com/osmosis-labs/osmosis).
+
+Osmosis is the largest DEX in the Cosmos ecosystem, serving as a source of liquidity for over 50 sovereign blockchains connected via IBC. It features concentrated liquidity, Superfluid Staking, Protocol Revenue, and a cross-chain trading suite. For system requirements, build instructions, and full documentation, refer to the upstream repo.
