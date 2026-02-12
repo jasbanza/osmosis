@@ -1,6 +1,6 @@
 # Osmosis -- Snapshot Ingestor Branch
 
-> **This is a special-purpose branch: `osmosis-snapshot-for-sqs-ingest`**
+> **This is a special-purpose branch: `jason/osmosis-snapshot-for-sqs-ingest`**
 >
 > This branch provides a patched `osmosisd` binary that starts from a mainnet snapshot, pushes
 > **all** pool data to SQS via gRPC on the very first committed block, and then **halts automatically**.
@@ -54,7 +54,7 @@ The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
 ```bash
 git clone https://github.com/jasbanza/osmosis.git
 cd osmosis
-git checkout osmosis-snapshot-for-sqs-ingest
+git checkout jason/osmosis-snapshot-for-sqs-ingest
 go install ./cmd/osmosisd
 ```
 
