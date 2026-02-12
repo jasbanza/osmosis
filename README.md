@@ -1,61 +1,101 @@
-# Osmosis
+# Osmosis SQS Snapshot Ingestor
 
-![Banner!](assets/banner.png)
+> **This is a modified fork of [`osmosis-labs/osmosis`](https://github.com/osmosis-labs/osmosis).** For the full Osmosis documentation, see the [upstream repository](https://github.com/osmosis-labs/osmosis).
 
-[![Project Status: Active -- The project has reached a stable, usable
-state and is being actively
-developed.](https://img.shields.io/badge/repo%20status-Active-green.svg?style=flat-square)](https://www.repostatus.org/#active)
-[![GoDoc](https://img.shields.io/badge/godoc-reference-blue?style=flat-square&logo=go)](https://pkg.go.dev/github.com/osmosis-labs/osmosis/v11)
-[![Go Report
-Card](https://goreportcard.com/badge/github.com/osmosis-labs/osmosis?style=flat-square)](https://goreportcard.com/report/github.com/osmosis-labs/osmosis/v11)
-[![Version](https://img.shields.io/github/tag/osmosis-labs/osmosis.svg?style=flat-square)](https://github.com/osmosis-labs/osmosis/releases/latest)
-[![License:
-Apache-2.0](https://img.shields.io/github/license/osmosis-labs/osmosis.svg?style=flat-square)](https://github.com/osmosis-labs/osmosis/blob/main/LICENSE)
-[![Lines Of
-Code](https://img.shields.io/tokei/lines/github/osmosis-labs/osmosis?style=flat-square)](https://github.com/osmosis-labs/osmosis)
-[![GitHub
-Super-Linter](https://img.shields.io/github/actions/workflow/status/osmosis-labs/osmosis/lint.yml?style=flat-square&label=Lint)](https://github.com/marketplace/actions/super-linter)
-[![Discord](https://badgen.net/badge/icon/discord?icon=discord&label)](https://discord.gg/osmosis)
+A single-purpose patched `osmosisd` binary that starts from a snapshot, pushes **all** pool data to SQS via gRPC on the very first committed block, and then **halts automatically**.
 
-As the largest DEX in the Cosmos, Osmosis is a source of liquidity for over 50 sovereign blockchains connected via IBC. Pioneering in its approach, Osmosis offers a dynamic trading and liquidity provision experience, integrating non-IBC assets from other ecosystems, including: Bitcoin, Ethereum, Solana, Avalanche, and Polkadot. Initially adopting Balancer-style pools, Osmosis now also features a concentrated liquidity model that is orders of magnitude more capital efficient, meaning that significantly less liquidity is required to handle the same amount of trading volume with minimal slippage.
+Use this to capture SQS pool/route state from a snapshot-restored node with minimal block advancement, so you can run SQS offline from those state files for reproducible testing.
 
-As a true Layer 1 appchain, Osmosis has greater control over the full blockchain stack than traditional smart contract DEXs, which must follow the code of the parent chain that it is built on. This fine-grained control has enabled, for example, the development of Superfluid Staking, an extension of Proof of Stake that allows assets at the application layer to be staked to secure the chain. The customizability of appchains also allows implementing features like the Protocol Revenue module, which enables Osmosis to conduct on-chain cyclic arbitrage on behalf of OSMO stakers, balancing prices across pools while generating real yield revenue from this volume. Additionally, as a sovereign appchain, Osmosis governance can vote on upgrades to the protocol. One example of this was the introduction of a Taker Fee, which switched on the collection of exchange fees to generate a diverse yield from Osmosis volume and distribute it to OSMO stakers.
+## What's different from upstream?
 
-Osmosis is bringing the centralized exchange experience to the decentralized world by building a cross-chain DEX and trading suite that aims to interconnect all chains via IBC. To reach this goal, Osmosis hosts an ever-expanding suite of DeFi applications, including: lending/borrowing, margin trading, strategy vaults, perpetuals, fiat on-ramping, NFTs, stablecoins, etc.—all of the functionalities that centralized exchanges offer, and more, but in the trust-minimized environment of decentralized finance.
+Only two files are changed:
 
-## System Requirements
+| File | Change |
+|------|--------|
+| `ingest/sqs/service/blockprocessor/full_sqs_block_process_strategy.go` | Removed the node sync check; added auto-halt (`os.Exit(0)`) after successful SQS push |
+| `app/app.go` | Added pre-flight gRPC connectivity check — panics immediately if SQS isn't reachable |
 
-This system spec has been tested by many users and validators and found
-to be comfortable:
+The rest of the codebase is identical to upstream `osmosis-labs/osmosis`.
 
-- Quad Core or larger AMD or Intel (amd64) CPU
-  - ARM CPUs like the Apple M1 are not supported at this time.
-- 64GB RAM (A lot can be in swap)
-- 1TB NVMe Storage
-- 100MBPS bidirectional internet connection
+---
 
-You can run Osmosis on lower-spec hardware for each component, but you
-may find that it is not highly performant or prone to crashing.
+## Prerequisites
 
-## Documentation
+- An Osmosis snapshot (any age) restored to `~/.osmosisd/data/`
+- SQS source code (your branch) — e.g. at `/root/sqs`
+- Both on the same machine (or adjust addresses accordingly)
+- Go 1.21+ installed
 
-For the most up to date documentation please visit
-[docs.osmosis.zone](https://docs.osmosis.zone/)
+---
 
-## Joining the Mainnet
+## Step 1: Build the patched binary
 
-[Please visit the official instructions on how to join the Mainnet
-here.](https://docs.osmosis.zone/overview/validate/joining-mainnet)
+```bash
+git clone https://github.com/jasbanza/osmosis.git
+cd osmosis
+git checkout sqs-snapshot-ingestor   # or whatever branch the PR merges to
+go install ./cmd/osmosisd
+```
 
-Thank you for supporting a healthy blockchain network and community by
-running an Osmosis node!
+Verify:
+```bash
+osmosisd version
+```
 
-## Contributing
+## Step 2: Restore your snapshot
 
-The contributing guide for Osmosis explains the branching structure, how
-to use the SDK fork, and how to make / test updates to SDK branches.
+If you haven't already, restore your snapshot into `~/.osmosisd/data/`. Check your current height:
 
-## LocalOsmosis
+```bash
+curl -sS http://localhost:26657/status 2>/dev/null \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['sync_info']['latest_block_height'])" \
+  || echo "osmosisd not running yet - that's fine"
+```
 
-LocalOsmosis is a containerized local Osmosis testnet used for trying out new features locally. 
-LocalOsmosis documentation can be found [here](https://github.com/osmosis-labs/osmosis/tree/main/tests/localosmosis)
+## Step 3: Add seeds to `config.toml`
+
+Edit `~/.osmosisd/config/config.toml`, find the `[p2p]` section, and set:
+
+```toml
+seeds = "20e1000e88125698264454a884812746c2eb4807@seeds.lavenderfive.com:12556,ade4d8bc8cbe014af6ebdf3cb7b1e9ad36f412c0@seeds.polkachu.com:12556,ebc272824924ea1a27ea3183dd0b9ba713494f83@osmosis-mainnet-seed.autostake.com:26716,3cc024d1c760c9cd96e6413abaf3b36a8bdca58e@seeds.goldenratiostaking.net:1630,e891d42c31064fb7e0d99839536164473c4905c2@seed-osmosis.freshstaking.com:31656"
+```
+
+## Step 4: Enable SQS ingestion in `app.toml`
+
+Edit `~/.osmosisd/config/app.toml` and add/update the SQS section:
+
+```toml
+[osmosis-sqs]
+is-enabled = true
+grpc-ingest-address = ["localhost:50051"]
+grpc-ingest-max-call-size-bytes = 100000000
+```
+
+## Step 5: Start SQS first
+
+```bash
+cd /root/sqs   # or wherever your SQS source is
+go run ./...
+```
+
+Wait until you see it's listening on port 50051.
+
+## Step 6: Start the patched osmosisd
+
+```bash
+osmosisd start
+```
+
+You should see:
+1. `SQS pre-flight check passed: localhost:50051 is reachable`
+2. The node syncing / catching up to the network
+3. On the first committed block: pool extraction logs
+4. `SQS SNAPSHOT INGEST COMPLETE — ALL POOLS PUSHED!`
+5. The process exits automatically
+
+## Step 7: Verify SQS received the data
+
+Check SQS has the pool data:
+```bash
+curl -sS http://localhost:9092/pools | python3 -m json.tool | head -50
+```

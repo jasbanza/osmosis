@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 	"github.com/skip-mev/block-sdk/v2/block"
@@ -380,6 +382,21 @@ func NewOsmosisApp(
 		sqsGRPCClients := make([]domain.SQSGRPClient, len(sqsConfig.GRPCIngestAddress))
 		for i, grpcIngestAddress := range sqsConfig.GRPCIngestAddress {
 			sqsGRPCClients[i] = sqsservice.NewGRPCCLient(grpcIngestAddress, sqsConfig.GRPCIngestMaxCallSizeBytes, appCodec)
+		}
+
+		// SQS pre-flight connectivity check: verify all SQS gRPC endpoints are reachable before proceeding.
+		for _, addr := range sqsConfig.GRPCIngestAddress {
+			preflightCtx, preflightCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			testConn, dialErr := grpc.DialContext(preflightCtx, addr,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithBlock(),
+			)
+			preflightCancel()
+			if dialErr != nil {
+				panic(fmt.Sprintf("SQS pre-flight check failed: cannot reach SQS gRPC at %s: %v. Make sure SQS is running first!", addr, dialErr))
+			}
+			testConn.Close()
+			logger.Info(fmt.Sprintf("SQS pre-flight check passed: %s is reachable", addr))
 		}
 
 		for _, grpcClient := range sqsGRPCClients {
